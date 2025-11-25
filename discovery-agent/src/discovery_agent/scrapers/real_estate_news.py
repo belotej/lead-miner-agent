@@ -8,6 +8,8 @@ import re
 import time
 import json
 from openai import OpenAI, AzureOpenAI
+from bs4 import BeautifulSoup
+from discovery_agent.utils.deduplication import Deduplication
 
 class RealEstateDiscovery:
     def __init__(self):
@@ -43,16 +45,52 @@ class RealEstateDiscovery:
         self.base_google_news_url = "https://news.google.com/rss/search?q={}&hl=en-US&gl=US&ceid=US:en"
         
         self.direct_feeds = [
-            "https://www.bizjournals.com/dallas/news/real_estate/commercial/feed",
+            "https://rss.bizjournals.com/feed/225b05c17d74d990c84b5a662dbead1d328d16cf/14001?market=dallas&selectortype=channel&selectorvalue=1,2,3,4,5,9,7,15",
             "https://www.bisnow.com/rss/dallas-ft-worth",
+            "https://fortworthbusiness.com/feed/",
+            "https://dallasinnovates.com/feed/"
         ]
         
-        self.keywords = [
-            "office lease", 
-            "relocation", 
-            "new headquarters", 
-            "office expansion",
-            "moving to"
+        # Advanced Google News Queries
+        # Core cities for most queries
+        core_cities = "Dallas OR Plano OR Frisco OR Irving"
+        # Extended cities for some queries
+        extended_cities = "Dallas OR \"Fort Worth\" OR Plano OR Frisco OR Irving OR Southlake OR Allen"
+        # Regional catch-all
+        regional = "DFW OR \"Dallas-Fort Worth\""
+
+        self.google_queries = [
+            # 1. Leases with SqFt requirement (Filters out residential)
+            f'"office lease" ({extended_cities}) ("square feet" OR sqft) -apartment -residential',
+            
+            # 2. HQ Relocations (High Value)
+            f'("headquarters" OR "corporate headquarters") (moving OR relocating) ({regional} OR {core_cities}) -personal',
+            
+            # 3. New Offices with employee context
+            f'("new office" OR "opening office") ({core_cities} OR Southlake OR Allen) (company OR firm) employees',
+            
+            # 4. Expansions with hiring context
+            f'("office expansion" OR "expanding operations") ({regional} OR {extended_cities}) (employees OR hiring)',
+            
+            # 5. Explicit signed leases
+            f'("signed lease" OR "leased") office ({core_cities}) "square feet"',
+            
+            # 6. Buildouts / Campuses
+            f'("corporate campus" OR "office buildout") ({regional} OR {extended_cities})',
+            
+            # 7. Return to Office (RTO) Mandates
+            f'("return to office" OR "RTO" OR "office mandate") ({regional} OR {extended_cities}) (days a week OR hybrid OR "in-person")'
+        ]
+        
+        # Strict Client-Side Location Filter
+        self.target_locations = [
+            "dallas", "fort worth", "dfw", "metroplex", "arlington", "plano", "garland", 
+            "irving", "mckinney", "frisco", "grand prairie", "mesquite", "denton", 
+            "richardson", "lewisville", "addison", "allen", "southlake", "grapevine", 
+            "coppell", "rockwall", "carrollton", "farmers branch", "the colony", 
+            "flower mound", "keller", "burleson", "mansfield", "north richland hills", 
+            "euless", "bedford", "hurst", "lancaster", "desoto", "cedar hill", 
+            "las colinas", "legacy west", "uptown", "deep ellum", "bishop arts"
         ]
 
     def _load_config(self):
@@ -69,28 +107,50 @@ class RealEstateDiscovery:
             
         with open(config_path, 'r') as f:
             return yaml.safe_load(f)
+            
+    def _is_location_relevant(self, text):
+        """Check if text contains any of the target DFW locations."""
+        text_lower = text.lower()
+        return any(loc in text_lower for loc in self.target_locations)
 
     def run(self):
         self.logger.info("Running Real Estate Signal Discovery (RSS + Batch AI)...")
         
         raw_items = []
         
-        # 1. Process Google News Feeds
-        for keyword in self.keywords:
-            # Broader Query: keyword AND (Dallas OR Fort Worth OR DFW)
-            query = f'"{keyword}" (Dallas OR "Fort Worth" OR DFW) when:30d'
+        # 1. Process Google News Feeds (Advanced Queries)
+        for idx, query_template in enumerate(self.google_queries):
+            # Append time filter
+            query = f'{query_template} when:7d'
             encoded_query = urllib.parse.quote(query)
             feed_url = self.base_google_news_url.format(encoded_query)
             
-            self.logger.info(f"Fetching RSS for: {keyword}")
-            items = self._fetch_feed_items(feed_url, keyword, "google_news_rss")
+            self.logger.info(f"Fetching RSS for Query #{idx+1}")
+            # Source name: google_news_q1, q2, etc.
+            items = self._fetch_feed_items(feed_url, query_template, f"google_news_q{idx+1}")
             raw_items.extend(items)
             time.sleep(1) 
             
         # 2. Process Direct Feeds
         for feed_url in self.direct_feeds:
             self.logger.info(f"Fetching Direct Feed: {feed_url}")
-            items = self._fetch_feed_items(feed_url, "Industry News", "industry_rss")
+            
+            # Better Source Naming
+            source_name = "direct_unknown"
+            if "bizjournals" in feed_url:
+                source_name = "direct_bizjournals"
+            elif "dallasinnovates" in feed_url:
+                source_name = "direct_dallas_innovates"
+            elif "fortworthbusiness" in feed_url:
+                source_name = "direct_fw_business_press"
+            elif "bisnow" in feed_url:
+                source_name = "direct_bisnow"
+            else:
+                # Fallback: extraction
+                domain = urllib.parse.urlparse(feed_url).netloc.replace("www.", "").split(".")[0]
+                source_name = f"direct_{domain}"
+
+            items = self._fetch_feed_items(feed_url, "Industry News", source_name)
             raw_items.extend(items)
             
         # Deduplicate based on Link URL
@@ -99,24 +159,91 @@ class RealEstateDiscovery:
             unique_items[item['link']] = item
             
         unique_list = list(unique_items.values())
-        self.logger.info(f"Collected {len(unique_list)} unique raw articles. Starting AI analysis...")
+        self.logger.info(f"Collected {len(unique_list)} items (unique links).")
+
+        # Deduplicate based on Title Similarity (Fuzzy Match)
+        deduplicator = Deduplication()
+        final_unique_list = deduplicator.deduplicate_raw_items(unique_list)
+        self.logger.info(f"After title deduplication: {len(final_unique_list)} items.")
+        
+        # DEBUG: Save Raw Items to CSV for Audit
+        self._save_raw_audit_log(final_unique_list)
         
         # 3. Batch AI Analysis
-        final_leads = self._process_batches(unique_list)
+        self.logger.info("Starting AI analysis...")
+        final_leads = self._process_batches(final_unique_list)
         
         return final_leads
 
+    def _save_raw_audit_log(self, items):
+        import pandas as pd
+        try:
+            # Resolve absolute path to data directory
+            current_dir = os.path.dirname(os.path.abspath(__file__)) # src/discovery_agent/scrapers
+            root_dir = os.path.dirname(os.path.dirname(os.path.dirname(current_dir))) # discovery-agent
+            data_dir = os.path.join(root_dir, "data")
+            
+            if not os.path.exists(data_dir):
+                os.makedirs(data_dir)
+                
+            df = pd.DataFrame(items)
+            # Select useful columns
+            cols = ['title', 'source_type', 'published', 'link', 'summary']
+            df = df[cols] if set(cols).issubset(df.columns) else df
+            
+            output_path = os.path.join(data_dir, "debug_raw_rss_log.csv")
+            
+            # Append if exists, or create new
+            if os.path.exists(output_path):
+                df.to_csv(output_path, mode='a', header=False, index=False)
+            else:
+                df.to_csv(output_path, index=False)
+            self.logger.info(f"Saved raw audit log to {output_path}")
+        except Exception as e:
+            self.logger.warning(f"Failed to save audit log: {e}")
+
     def _fetch_feed_items(self, feed_url, context, source_type):
+        import requests
         items = []
         try:
-            feed = feedparser.parse(feed_url)
+            # Use requests with User-Agent to bypass 403 Forbidden blocks
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            response = requests.get(feed_url, headers=headers, timeout=10)
+            
+            if response.status_code != 200:
+                self.logger.warning(f"Failed to fetch feed {feed_url}: Status {response.status_code}")
+                return []
+                
+            # Parse the XML content string
+            feed = feedparser.parse(response.content)
+            
             # No pre-filtering here anymore. We capture everything the feed gives us for the AI to decide.
             for entry in feed.entries:
+                raw_summary = entry.get('description', '') or entry.get('summary', '')
+                
+                # Clean HTML
+                clean_summary = raw_summary
+                if raw_summary:
+                    try:
+                        soup = BeautifulSoup(raw_summary, "html.parser")
+                        clean_summary = soup.get_text(separator=" ", strip=True)
+                    except Exception:
+                        pass # Fallback to raw if BS4 fails
+                
+                # STRICT LOCATION FILTER (Client-Side)
+                # Only apply to Google News results, as Direct Feeds are already curated
+                if source_type.startswith("google_news"):
+                    content_text = (entry.get('title', '') + " " + clean_summary)
+                    if not self._is_location_relevant(content_text):
+                        continue
+
                 items.append({
                     "title": entry.get('title', ''),
                     "link": entry.get('link', ''),
                     "published": entry.get('published', datetime.now().strftime("%Y-%m-%d")),
-                    "summary": (entry.get('description', '') or entry.get('summary', ''))[:300], # Truncate summary
+                    "summary": clean_summary[:500], # Clean text, then limit to 500 chars
                     "context": context,
                     "source_type": source_type
                 })
@@ -149,32 +276,37 @@ class RealEstateDiscovery:
 
         prompt = f"""
         You are an Expert Lead Analyst for the Dallas/Fort Worth Commercial Real Estate market.
-        Review the following news items and identify ONLY the ones that indicate a VALID commercial office signal.
+        Review the following news items and identify ONLY the ones that indicate a VALID commercial office signal in Dallas/Fort Worth.
         
-        Criteria for VALID Signal:
-        1. Signing a new OFFICE lease (Commercial, not residential/apartment).
-        2. Relocating headquarters or office.
-        3. Expanding office footprint.
-        4. Breaking ground on a new OFFICE building (major tenant named).
+        Criteria:
+        1. Signing a new OFFICE lease (or renewing/expanding).
+        2. Relocating headquarters or opening a new office.
+        3. Breaking ground on a new corporate campus.
+        4. Mandating "Return to Office" (RTO) for employees (e.g. 3+ days a week).
         
-        Location Constraints:
-        - MUST be in the Dallas / Fort Worth Metroplex (Dallas, Fort Worth, Plano, Frisco, Irving, Arlington, Richardson, Southlake, etc.)
-        - IGNORE items about properties in Florida, Houston, Austin, New York, etc., unless it involves a MOVE TO Dallas.
+        IMPORTANT:
+        - DEDUPLICATE: If multiple items refer to the EXACT SAME event/company, return ONLY ONE lead (the one with the most detail).
         
-        Input Items:
+        Ignore:
+        - Residential/Apartment news (CRITICAL).
+        - Retail/Restaurant leases.
+        - General market reports without specific tenant names.
+        - "Top Brokers" lists or opinion pieces.
+        
+        Items to Analyze:
         {items_text}
         
         Return a JSON OBJECT with a key "leads" containing a list of valid items.
         Each item in the list should have:
         - original_index: integer (The ITEM number from input)
         - company_name: string (The tenant/company moving)
-        - signal_type: string (lease | relocation | expansion | construction)
+        - signal_type: string (lease | relocation | expansion | construction | rto)
         - sq_ft: integer (0 if unknown)
         - location: string (Specific City/Area in DFW)
         - reason: string (Why you selected this)
         
         If no items are relevant, return {{"leads": []}}
-        """
+"""
         
         try:
             response = self.client.chat.completions.create(
@@ -221,7 +353,7 @@ class RealEstateDiscovery:
                         "source_url": original['link'],
                         "county": "Dallas/Tarrant/Collin", # Generic for now
                         "all_signals": "real_estate_news",
-                        "notes": f"Headline: {original['title']}"
+                        "notes": f"Headline: {original['title']}\nSummary: {original['summary']}"
                     }
                     leads.append(lead)
             

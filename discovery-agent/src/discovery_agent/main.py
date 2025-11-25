@@ -13,6 +13,7 @@ from discovery_agent.utils.excel_writer import ExcelWriter
 from discovery_agent.scrapers.job_postings import JobPostingScraper
 # from discovery_agent.scrapers.certificates_of_occupancy import CertificateOfOccupancyScraper
 from discovery_agent.scrapers.real_estate_news import RealEstateDiscovery
+from discovery_agent.scrapers.funding_news import FundingNewsDiscovery
 
 def main():
     # Ensure logs directory exists
@@ -31,11 +32,11 @@ def main():
     all_new_leads = []
 
     # 1. Job Postings
-    print("\n--- Running Job Posting Scraper (SKIPPED) ---")
-    # job_scraper = JobPostingScraper()
-    # job_leads = job_scraper.run()
-    # print(f"Found {len(job_leads)} leads from job postings.")
-    # all_new_leads.extend(job_leads)
+    print("\n--- Running Job Posting Scraper ---")
+    job_scraper = JobPostingScraper()
+    job_leads = job_scraper.run()
+    print(f"Found {len(job_leads)} leads from job postings.")
+    all_new_leads.extend(job_leads)
     
     # 2. Real Estate Signals
     print("\n--- Running Real Estate Signal Discovery ---")
@@ -43,6 +44,13 @@ def main():
     re_leads = re_discovery.run()
     print(f"Found {len(re_leads)} leads from real estate news.")
     all_new_leads.extend(re_leads)
+    
+    # 3. Funding Signals
+    print("\n--- Running Funding News Discovery ---")
+    funding_discovery = FundingNewsDiscovery()
+    funding_leads = funding_discovery.run()
+    print(f"Found {len(funding_leads)} leads from funding news.")
+    all_new_leads.extend(funding_leads)
     
     # Save to Excel
     print(f"\nSaving total {len(all_new_leads)} leads to Excel...")
