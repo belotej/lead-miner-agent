@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.env
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# Project Specific
+logs/
+data/
+*.xlsx
+*.log
+
+# Secrets - CRITICAL
+discovery-agent/config/config.yaml

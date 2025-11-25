@@ -1,0 +1,60 @@
+
+geographic_scope:
+  cities:
+    - Dallas
+    - Fort Worth
+    - Plano
+    - Frisco
+    - McKinney
+    - Irving
+    - Arlington
+  counties:
+    - Dallas
+    - Tarrant
+    - Collin
+    - Denton
+
+job_posting:
+  target_titles:
+    - "Facilities Manager"
+    - "Director of Facilities"
+    - "VP Real Estate"
+    - "Office Manager"
+    - "Workplace Manager"
+  sources:
+    - indeed
+    - glassdoor
+  rate_limit_seconds: 2
+
+funding:
+  minimum_amount_millions: 10
+  funding_rounds:
+    - "Series B"
+    - "Series C"
+    - "Series D"
+    - "Series E"
+  lookback_days: 90
+
+real_estate:
+  keywords:
+    - "office lease"
+    - "headquarters relocation"
+    - "office expansion"
+    - "new office"
+  lookback_days: 90
+
+public_records:
+  co_min_sqft: 5000
+  remodel_min_value: 100000
+  lookback_days: 30
+
+api_keys:
+  google_news: "YOUR_API_KEY"
+  crunchbase: "YOUR_API_KEY"
+  google_custom_search_key: "YOUR_GOOGLE_SEARCH_KEY"
+  google_custom_search_cx: "YOUR_SEARCH_CX"
+  rapidapi_key: "YOUR_RAPIDAPI_KEY"
+  openai_api_key: "YOUR_OPENAI_KEY"
+  azure_openai_endpoint: "YOUR_AZURE_ENDPOINT"
+  azure_deployment_name: "YOUR_DEPLOYMENT_NAME"
+  azure_api_version: "2024-02-15-preview"
