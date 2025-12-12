@@ -230,25 +230,40 @@ class FundingNewsDiscovery:
             items_text += f"ITEM {idx}:\nTitle: {item['title']}\nSummary: {item['summary']}\nLink: {item['link']}\n\n"
             
         prompt = f"""
-        Review the following news items and identify ONLY the ones that indicate a company RAISING CAPITAL in Dallas/DFW.
-        
-        Criteria:
-        1. MUST be a funding event (Series A, B, C, Seed, Venture Capital, Private Equity investment).
-        2. MUST be in Dallas, Fort Worth, or DFW Metroplex.
-        3. Ignore: M&A where the company is bought out (unless they mention expansion), Stock market news, Real Estate funds.
-        
+        You are an Expert Funding Analyst identifying companies that recently raised capital in Dallas/Fort Worth.
+        These companies are likely to expand their offices and need furniture.
+
+        Review the following news items and identify ONLY valid funding events.
+
+        VALID Funding Signals:
+        - Series A, B, C, D funding rounds
+        - Seed funding or Venture Capital investment
+        - Private Equity investment (growth equity, not buyouts)
+        - The company receiving funds MUST be headquartered in Dallas/Fort Worth/DFW Metroplex
+
+        EXCLUDE (Not Valid):
+        - M&A where the company is being ACQUIRED/SOLD (unless explicitly mentions expansion)
+        - Real Estate investment funds or REITs
+        - Stock market news (IPO filings without funding context)
+        - Restaurant/Hospitality businesses (not our target market)
+        - Healthcare/Medical practices (not our target market)
+        - Charitable donations or grants
+        - The investor being from DFW (we want the COMPANY to be in DFW)
+
         Items to Analyze:
         {items_text}
-        
+
         Return a JSON OBJECT with a key "leads" containing a list of valid items.
         Each item in the list should have:
         - original_index: integer
         - company_name: string (The company RAISING the money)
-        - funding_amount: string (e.g. "$10M", "Undisclosed")
-        - round_type: string (Series A, Seed, etc.)
-        - location: string (Specific City)
-        - reason: string (Why valid)
-        
+        - funding_amount: string (e.g. "$15M", "Undisclosed")
+        - round_type: string (Series A, Seed, Growth Equity, etc.)
+        - industry: string (e.g. "SaaS", "FinTech", "Professional Services", "Manufacturing")
+        - location: string (Specific city in DFW)
+        - company_website: string (if mentioned, otherwise "Unknown")
+        - reason: string (Brief explanation of why this is a valid lead)
+
         If no items are relevant, return {{"leads": []}}
         """
         
@@ -280,15 +295,28 @@ class FundingNewsDiscovery:
                          if any(c in amount_str for c in ['1','2','3','4','5','6','7','8','9']):
                              signal_strength = "Very High"
 
+                    # Extract new fields
+                    industry = valid_item.get('industry', 'Unknown')
+                    company_website = valid_item.get('company_website', 'Unknown')
+                    funding_amount = valid_item.get('funding_amount', 'Undisclosed')
+                    round_type = valid_item.get('round_type', 'Unknown')
+                    reason = valid_item.get('reason', '')
+
+                    # Build rich details string
+                    details = f"Raised {funding_amount} ({round_type}). Industry: {industry}."
+                    if company_website and company_website != "Unknown":
+                        details += f" Website: {company_website}."
+                    details += f" AI: {reason}"
+
                     lead = {
                         "discovery_date": datetime.now().strftime("%Y-%m-%d"),
                         "company_name": valid_item.get('company_name', 'Unknown'),
-                        "domain": "", 
+                        "domain": company_website if company_website != "Unknown" else "",
                         "discovery_source": f"funding_{original['source_type']}",
                         "signal_type": "funding_round",
                         "signal_strength": signal_strength,
                         "signal_date": original['published'],
-                        "details": f"Raised {valid_item.get('funding_amount')} ({valid_item.get('round_type')}). AI: {valid_item.get('reason')}",
+                        "details": details,
                         "location": valid_item.get('location', "DFW Area"),
                         "timeline": "Immediate (Hiring)",
                         "source_url": original['link'],
@@ -297,7 +325,7 @@ class FundingNewsDiscovery:
                         "notes": f"Headline: {original['title']}\nSummary: {original['summary']}"
                     }
                     leads.append(lead)
-                    self.logger.info(f"💰 FUNDING FOUND: {lead['company_name']} - {lead['details']}")
+                    self.logger.info(f"[FUNDING] {lead['company_name']} - {lead['details']}")
 
             return leads
 

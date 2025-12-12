@@ -276,35 +276,43 @@ class RealEstateDiscovery:
 
         prompt = f"""
         You are an Expert Lead Analyst for the Dallas/Fort Worth Commercial Real Estate market.
-        Review the following news items and identify ONLY the ones that indicate a VALID commercial office signal in Dallas/Fort Worth.
-        
-        Criteria:
-        1. Signing a new OFFICE lease (or renewing/expanding).
-        2. Relocating headquarters or opening a new office.
-        3. Breaking ground on a new corporate campus.
-        4. Mandating "Return to Office" (RTO) for employees (e.g. 3+ days a week).
-        
-        IMPORTANT:
-        - DEDUPLICATE: If multiple items refer to the EXACT SAME event/company, return ONLY ONE lead (the one with the most detail).
-        
-        Ignore:
-        - Residential/Apartment news (CRITICAL).
-        - Retail/Restaurant leases.
-        - General market reports without specific tenant names.
-        - "Top Brokers" lists or opinion pieces.
-        
+        You are identifying companies that will need OFFICE FURNITURE due to moves, expansions, or office changes.
+
+        Review the following news items and identify ONLY valid commercial office signals.
+
+        VALID Signals (These companies will likely need furniture):
+        1. Signing a new OFFICE lease (or renewing/expanding existing lease)
+        2. Relocating headquarters or opening a new regional office
+        3. Breaking ground on or completing a new corporate campus/office building
+        4. Mandating "Return to Office" (RTO) for employees (especially 4-5 days/week)
+        5. Major office renovation or build-out
+
+        IMPORTANT - EXCLUDE These (Not Valid Leads):
+        - Residential/Apartment/Multi-family news (CRITICAL - these are NOT office)
+        - Retail/Restaurant leases (not office furniture buyers)
+        - Industrial/Warehouse leases (not office furniture buyers)
+        - Real estate brokerages or landlords as the "company" (they broker deals, they don't buy furniture)
+        - General market reports without a specific TENANT/COMPANY name
+        - "Top Brokers" lists, awards, or opinion pieces
+        - News about a building being SOLD (unless a new tenant is named)
+
+        DEDUPLICATION:
+        - If multiple items refer to the SAME event/company, return ONLY ONE lead (the most detailed one)
+
         Items to Analyze:
         {items_text}
-        
+
         Return a JSON OBJECT with a key "leads" containing a list of valid items.
         Each item in the list should have:
         - original_index: integer (The ITEM number from input)
-        - company_name: string (The tenant/company moving)
-        - signal_type: string (lease | relocation | expansion | construction | rto)
+        - company_name: string (The TENANT/COMPANY moving - NOT the landlord or broker)
+        - signal_type: string (lease | relocation | expansion | construction | rto | renovation)
         - sq_ft: integer (0 if unknown)
         - location: string (Specific City/Area in DFW)
-        - reason: string (Why you selected this)
-        
+        - timeline: string (e.g. "Q1 2025", "Summer 2025", "Immediate", "Unknown")
+        - industry: string (e.g. "Technology", "Financial Services", "Law Firm", "Professional Services")
+        - reason: string (Brief explanation of why this company needs furniture)
+
         If no items are relevant, return {{"leads": []}}
 """
         
@@ -332,26 +340,45 @@ class RealEstateDiscovery:
                     valid_idx_set.add(idx)
                     original = batch_items[idx]
                     
-                    self.logger.info(f"✅ AI KEPT: {original['title'][:50]}... | Reason: {valid_item.get('reason', '')}")
-                    
+                    self.logger.info(f"[KEPT] {original['title'][:50]}... | Reason: {valid_item.get('reason', '')}")
+
+                    # Extract new fields
+                    sq_ft = valid_item.get('sq_ft', 0)
+                    timeline = valid_item.get('timeline', 'Unknown')
+                    industry = valid_item.get('industry', 'Unknown')
+                    signal_type = valid_item.get('signal_type', 'office_move')
+                    reason = valid_item.get('reason', '')
+
                     # Signal Strength Logic
                     signal_strength = "High"
-                    if valid_item.get('sq_ft', 0) > 10000:
+                    if sq_ft > 10000:
                         signal_strength = "Very High"
+                    elif signal_type == "rto":
+                        signal_strength = "Very High"  # RTO mandates are strong signals
+
+                    # Build rich details string
+                    details_parts = [f"Signal: {signal_type.upper()}"]
+                    if sq_ft > 0:
+                        details_parts.append(f"Size: {sq_ft:,} sqft")
+                    details_parts.append(f"Industry: {industry}")
+                    if timeline != "Unknown":
+                        details_parts.append(f"Timeline: {timeline}")
+                    details_parts.append(f"AI: {reason}")
+                    details = ". ".join(details_parts)
 
                     lead = {
                         "discovery_date": datetime.now().strftime("%Y-%m-%d"),
                         "company_name": valid_item.get('company_name', 'Unknown'),
-                        "domain": "", 
+                        "domain": "",
                         "discovery_source": f"rss_{original['source_type']}_ai",
-                        "signal_type": valid_item.get('signal_type', 'office_move'),
+                        "signal_type": signal_type,
                         "signal_strength": signal_strength,
                         "signal_date": original['published'],
-                        "details": f"AI: {valid_item.get('reason', '')}. SqFt: {valid_item.get('sq_ft', 0)}",
+                        "details": details,
                         "location": valid_item.get('location', "DFW Area"),
-                        "timeline": "3-6 Months",
+                        "timeline": timeline,
                         "source_url": original['link'],
-                        "county": "Dallas/Tarrant/Collin", # Generic for now
+                        "county": "Dallas/Tarrant/Collin",
                         "all_signals": "real_estate_news",
                         "notes": f"Headline: {original['title']}\nSummary: {original['summary']}"
                     }
@@ -360,7 +387,7 @@ class RealEstateDiscovery:
             # Log Rejections
             for i, item in enumerate(batch_items):
                 if i not in valid_idx_set:
-                    self.logger.info(f"❌ AI REJECTED: {item['title'][:50]}...")
+                    self.logger.info(f"[REJECTED] {item['title'][:50]}...")
 
             return leads
 
